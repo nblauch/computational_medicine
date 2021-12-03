@@ -1,0 +1,8 @@
+*.npy
+*.pkl
+*.csv
+*.tsv
+*.txt
+figures
+__pycache__
+.ipynb_checkpoints
