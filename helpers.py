@@ -4,12 +4,47 @@ import pandas as pd
 from nilearn.connectome import ConnectivityMeasure
 import nibabel as nib
 import nilearn
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+from scipy.stats import spearmanr, pearsonr
+from sklearn.model_selection import KFold, StratifiedKFold
+from sklearn.linear_model import RidgeCV, RidgeClassifierCV
+import sklearn
+import pdb
+from IPython import get_ipython
+import glob
 
 # configure as needed
-if os.env('SERVERNAME') == 'xps':
+if os.getenv('SERVERNAME') == 'xps':
     BIDS_DIR = '/mnt/d/bids/ds000030'
-elif os.env('SERVERNAME') == 'mind':
+elif os.getenv('SERVERNAME') == 'mind':
     BIDS_DIR = '/user_data/nblauch/bids/ds000030'
+    
+# stupid little hack for now, since just focusing on rest data
+SUBJECTS = [os.path.basename(os.path.dirname(os.path.dirname(file))) for file in glob.glob(f'{BIDS_DIR}/derivatives/fmriprep/**/func/*_task-rest_bold_space-fsaverage5.L.func.gii')]
+
+def X_is_running():
+    from subprocess import Popen, PIPE
+    p = Popen(["xset", "-q"], stdout=PIPE, stderr=PIPE)
+    p.communicate()
+    return p.returncode == 0
+
+def isnotebook():
+    try:
+        shell = get_ipython().__class__.__name__
+        if shell == 'ZMQInteractiveShell':
+            return True   # Jupyter notebook or qtconsole
+        elif shell == 'TerminalInteractiveShell':
+            return False  # Terminal running IPython
+        else:
+            return False  # Other type (?)
+    except NameError:
+        return False      # Probably standard Python interpreter
+
+if not X_is_running() and not isnotebook():
+    print('no X server detected. changing default matplotlib backend to Agg for compatibility.')
+    import matplotlib
+    matplotlib.use('Agg')
 
 GLASSER_ROIS_LONG = {'V1':1, 'medial superior temporal area':2, 'V6':3, 'V2':4, 'V3':5, 'V4':6, 'V8':7, 'primary motor cortex':8,
                     'primary sensory cortex':9, 'FEF':10, 'premotor eye field':11, 'area 55b':12, 'area V3A':13,
@@ -140,3 +175,143 @@ def get_subject_connectome(subject, overwrite=False):
         conn_z = .5*np.log((1+conn)/(1-conn))
         np.save(fn, conn_z)
     return conn_z
+
+def do_full_reg_analysis(X, y, x_name, y_name,
+                     do_pca=True,
+                     do_pcr=True,
+                     save=True,
+                     show=False,
+                     ):
+    """
+    replicate a full analysis pipeline for different feature engineering approaches (X) and continuous phenotypes (y)
+    """
+    if do_pca:
+        pca_sol = PCA().fit(X)
+        all_PCs = pca_sol.transform(X)
+        plt.scatter(all_PCs[:,0], all_PCs[:,1], c=y)
+        plt.colorbar()
+        if save:
+            plt.savefig(f'figures/X-{x_name}_y-{y_name}_PC-0-1.png', dpi=200, bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close()
+            
+        corrs = []
+        for pc in range(260):
+            PC = all_PCs[:,pc]
+            corrs.append(spearmanr(y, PC)[0])
+        os.makedirs('figures', exist_ok=True)
+        plt.plot(corrs)
+        plt.title(f'Correlation of {y_name} with PCs of {x_name}')
+        plt.xlabel('PC #')
+        plt.ylabel('Spearman corelation (r)')
+        plt.axhline(0,0,1,color='r',linestyle='--')
+        if save:
+            plt.savefig(f'figures/X-{x_name}_y-{y_name}_PC-corrs.png', dpi=200, bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close()
+
+    if do_pcr:
+        corrs = []
+        weights = []
+        for n_pcs in range(1,all_PCs.shape[1]):
+            kfold = KFold(3)
+            PCs = all_PCs[:,:n_pcs]
+            these_corrs = []
+            these_weights = []
+            for train_inds, test_inds in kfold.split(PCs):
+                X_train = PCs[train_inds]
+                X_test = PCs[test_inds]
+                model = RidgeCV(alphas=np.logspace(-4,4,num=9)).fit(X_train, y[train_inds])
+                preds = model.predict(X_test)
+                true = y[test_inds]
+                these_corrs.append(spearmanr(true, preds)[0])
+                these_weights.append(model.coef_)
+            corrs.append(np.mean(these_corrs))
+            weights.append(np.mean(these_weights,0))
+
+        plt.plot(corrs)
+        plt.title(f'Regressing {y_name} based on PCs of {x_name}')
+        plt.xlabel('# of PCs used')
+        plt.ylabel('cross-validated regression prediction (r)')
+        plt.axhline(0,0,1,color='r',linestyle='--')
+        if save:
+            plt.savefig(f'figures/X-{x_name}_y-{y_name}_PCR.png', dpi=200, bbox_inches='tight')
+        if show:
+            plt.show()    
+        plt.close()    
+        
+        
+def do_full_categ_analysis(X, y, x_name, y_name,
+                     do_pca=True,
+                     do_pcc=True,
+                     save=True,
+                     show=False,
+                     ):
+    """
+    replicate a full analysis pipeline for different feature engineering approaches (X) and categorical phenotypes (y)
+    """
+    groups = np.unique(y)
+    # assert len(groups) == 2, 'only implemented for binary classification'
+    
+    if do_pca:
+        pca_sol = PCA().fit(X)
+        all_PCs = pca_sol.transform(X)
+        plt.scatter(all_PCs[:,0], all_PCs[:,1], c=y)
+        plt.colorbar()
+        if save:
+            plt.savefig(f'figures/X-{x_name}_y-{y_name}_PC-0-1.png', dpi=200, bbox_inches='tight')
+        if show:
+            plt.show()
+        plt.close()
+            
+        if len(groups) == 2:
+            diffs = cohens_d(all_PCs[y == groups[0]], all_PCs[y == groups[1]])
+            plt.plot(diffs, 'o')
+            plt.title(f"Cohen's d of PCs of {x_name} across groups of {y_name}")
+            plt.xlabel('PC #')
+            plt.ylabel("Cohen's d")
+            plt.axhline(0,0,1,color='r',linestyle='--')
+            if save:
+                plt.savefig(f'figures/X-{x_name}_y-{y_name}_PC-diffs.png', dpi=200, bbox_inches='tight')
+            if show:
+                plt.show()
+            plt.close()
+
+    if do_pcc:
+        accs = []
+        weights = []
+        for n_pcs in range(1,all_PCs.shape[1]):
+            kfold = StratifiedKFold(3)
+            PCs = all_PCs[:,:n_pcs]
+            these_accs = []
+            these_weights = []
+            for train_inds, test_inds in kfold.split(PCs, y):
+                X_train = PCs[train_inds]
+                X_test = PCs[test_inds]
+                model = RidgeClassifierCV(alphas=np.logspace(-4,4,num=9)).fit(X_train, y[train_inds])
+                preds = model.predict(X_test)
+                true = y[test_inds]
+                these_accs.append(sklearn.metrics.balanced_accuracy_score(true, preds, adjusted=True))
+                these_weights.append(model.coef_)
+            accs.append(np.mean(these_accs))
+            weights.append(np.mean(these_weights,0))
+
+        plt.plot(accs)
+        plt.title(f'Classifying {y_name} based on PCs of {x_name}')
+        plt.xlabel('# of PCs used')
+        plt.ylabel('cross-validated classification accuracy \n (adjusted balanced accuracy)')
+        plt.axhline(0,0,1,color='r',linestyle='--')
+        if save:
+            plt.savefig(f'figures/X-{x_name}_y-{y_name}_PCC.png', dpi=200, bbox_inches='tight')
+        if show:
+            plt.show()    
+        plt.close()    
+        
+    
+def cohens_d(x,y):
+    nx = len(x)
+    ny = len(y)
+    dof = nx + ny - 2
+    return (np.mean(x,0) - np.mean(y,0)) / np.sqrt(((nx-1)*np.std(x, axis=0, ddof=1) ** 2 + (ny-1)*np.std(y, axis=0, ddof=1) ** 2) / dof)
