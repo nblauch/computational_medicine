@@ -23,7 +23,6 @@ connectome[connectome < np.percentile(connectome, 1-args.sparsity)] = 0
 connectome = np.maximum(connectome, connectome.T)
 
 ce_group = get_group_ce(sparsity=args.sparsity, task=args.task)
-cosine_sim = ce_group.similarity()
 
 ce_sub = cepy.CE(permutations=1,seed=1, workers=args.workers)
 ce_sub.fit(connectome)
