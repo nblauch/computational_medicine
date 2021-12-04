@@ -6,7 +6,7 @@ To run the code, first configure directories and acquire the data
 2) run `python get_data.py`
 3) download additional freesurfer derivatives from https://cmu.box.com/s/px6n005ru51lscn5m9b4jz2ckg2gsohu
 4) place the `freesurfer` folder in `{BIDS_DIR}/derivatives/`
-5) if access to a SLURM-based HPC is available, configure `run_slurm.sbatch` and `submit_jobs.py`
+5) if access to a SLURM-based HPC is available, configure `run_slurm.sbatch` and `submit_ce_jobs.py`
 
 Next, run the following scripts
 1) `python get_connectomes.py`
