@@ -13,6 +13,8 @@ import sklearn
 import pdb
 from IPython import get_ipython
 import glob
+import cepy
+from tqdm import tqdm
 
 # configure as needed
 if os.getenv('SERVERNAME') == 'xps':
@@ -176,6 +178,33 @@ def get_subject_connectome(subject, overwrite=False):
         np.save(fn, conn_z)
     return conn_z
 
+def get_group_ce(sparsity=0.3, task='rest', overwrite=False):
+    if task != 'rest':
+        raise NotImplementedError()
+    fn = f'{BIDS_DIR}/derivatives/python/cepy/group_ce_fc-{task}_sparsity-{sparsity}.json'
+    if os.path.exists(fn):
+        ce_group = cepy.load_model(fn)
+    else:
+        connectomes = []
+        connectomes = []
+        for sub in tqdm(SUBJECTS):
+            try:
+                connectomes.append(get_subject_connectome(sub, overwrite=False))
+            except Exception as e:
+                print(e)            
+        connectomes = np.stack(connectomes)
+        connectomes[np.isnan(connectomes)] = 0
+        connectomes[np.isinf(connectomes)] = 10
+        connectomes[np.isinf(-connectomes)] = -10
+        group_connectome = np.mean(connectomes, 0)
+        group_connectome = np.abs(group_connectome)
+        group_connectome[group_connectome < np.percentile(group_connectome, 1-sparsity)] = 0
+        ce_group = cepy.CE(permutations = 1, seed=1)  
+        ce_group.fit(group_connectome)
+        ce_group.save_model(fn)
+    return ce_group
+        
+
 def do_full_reg_analysis(X, y, x_name, y_name,
                      do_pca=True,
                      do_pcr=True,
@@ -215,22 +244,26 @@ def do_full_reg_analysis(X, y, x_name, y_name,
     if do_pcr:
         corrs = []
         weights = []
-        for n_pcs in range(1,all_PCs.shape[1]):
-            kfold = KFold(3)
-            PCs = all_PCs[:,:n_pcs]
+        kfold = KFold(3)
+        for train_inds, test_inds in kfold.split(X):
+            pca_sol = PCA().fit(X[train_inds])
+            X_train_all = pca_sol.transform(X[train_inds])
+            X_test_all = pca_sol.transform(X[test_inds])
             these_corrs = []
             these_weights = []
-            for train_inds, test_inds in kfold.split(PCs):
-                X_train = PCs[train_inds]
-                X_test = PCs[test_inds]
+            for n_pcs in range(1,all_PCs.shape[1]):
+                X_train = X_train_all[:,:n_pcs]
+                X_test = X_test_all[:,:n_pcs]
                 model = RidgeCV(alphas=np.logspace(-4,4,num=9)).fit(X_train, y[train_inds])
                 preds = model.predict(X_test)
                 true = y[test_inds]
                 these_corrs.append(spearmanr(true, preds)[0])
                 these_weights.append(model.coef_)
-            corrs.append(np.mean(these_corrs))
-            weights.append(np.mean(these_weights,0))
+            corrs.append(these_corrs)
+            weights.append(these_weights)
 
+        corrs = np.mean(corrs, 0)
+        weights = np.mean(weights, 0)
         plt.plot(corrs)
         plt.title(f'Regressing {y_name} based on PCs of {x_name}')
         plt.xlabel('# of PCs used')
@@ -246,6 +279,7 @@ def do_full_reg_analysis(X, y, x_name, y_name,
 def do_full_categ_analysis(X, y, x_name, y_name,
                      do_pca=True,
                      do_pcc=True,
+                     do_pcc_proper=True,
                      save=True,
                      show=False,
                      ):
@@ -282,33 +316,74 @@ def do_full_categ_analysis(X, y, x_name, y_name,
     if do_pcc:
         accs = []
         weights = []
-        for n_pcs in range(1,all_PCs.shape[1]):
-            kfold = StratifiedKFold(3)
-            PCs = all_PCs[:,:n_pcs]
+        kfold = StratifiedKFold(5)
+        for train_inds, test_inds in kfold.split(X, y):
+            pca_sol = PCA(n_components=4*X.shape[0]//5-1).fit(X[train_inds])
+            X_train_all = pca_sol.transform(X[train_inds])
+            X_test_all = pca_sol.transform(X[test_inds])
             these_accs = []
             these_weights = []
-            for train_inds, test_inds in kfold.split(PCs, y):
-                X_train = PCs[train_inds]
-                X_test = PCs[test_inds]
+            for n_pcs in range(1,X_train_all.shape[1]):
+                X_train = X_train_all[:,:n_pcs]
+                X_test = X_test_all[:,:n_pcs]
                 model = RidgeClassifierCV(alphas=np.logspace(-4,4,num=9)).fit(X_train, y[train_inds])
                 preds = model.predict(X_test)
                 true = y[test_inds]
-                these_accs.append(sklearn.metrics.balanced_accuracy_score(true, preds, adjusted=True))
+                these_accs.append(sklearn.metrics.balanced_accuracy_score(true, preds, adjusted=False))
                 these_weights.append(model.coef_)
-            accs.append(np.mean(these_accs))
-            weights.append(np.mean(these_weights,0))
+            accs.append(these_accs)
+            weights.append(these_weights)
 
+        accs = np.mean(accs, 0)
+        # weights = np.mean(weights, 0)
+        
         plt.plot(accs)
         plt.title(f'Classifying {y_name} based on PCs of {x_name}')
         plt.xlabel('# of PCs used')
-        plt.ylabel('cross-validated classification accuracy \n (adjusted balanced accuracy)')
-        plt.axhline(0,0,1,color='r',linestyle='--')
+        plt.ylabel('cross-validated classification accuracy \n (mean recall)')
+        plt.axhline(0.5,0,1,color='r',linestyle='--')
         if save:
             plt.savefig(f'figures/X-{x_name}_y-{y_name}_PCC.png', dpi=200, bbox_inches='tight')
         if show:
             plt.show()    
         plt.close()    
         
+    if do_pcc_proper:
+        kfold = StratifiedKFold(5)
+        n_pcs_sel = []
+        accs = []
+        for train_inds, test_inds in kfold.split(X, y):
+            kfold_inner = StratifiedKFold(5)
+            inner_accs = []
+            pca_sol = PCA(n_components=4*X.shape[0]//5-1).fit(X[train_inds])
+            for inner_train_inds, val_inds in kfold_inner.split(X[train_inds], y[train_inds]):
+                X_train_all = pca_sol.transform(X[train_inds[inner_train_inds]])
+                X_test_all = pca_sol.transform(X[train_inds[val_inds]])
+                these_accs = []
+                these_weights = []
+                for n_pcs in range(1,X_train_all.shape[1]):
+                    X_train = X_train_all[:,:n_pcs]
+                    X_test = X_test_all[:,:n_pcs]
+                    model = RidgeClassifierCV(alphas=np.logspace(-4,4,num=9)).fit(X_train, y[train_inds[inner_train_inds]])
+                    preds = model.predict(X_test)
+                    true = y[train_inds[val_inds]]
+                    these_accs.append(sklearn.metrics.balanced_accuracy_score(true, preds, adjusted=False))
+                    these_weights.append(model.coef_)
+                inner_accs.append(these_accs)
+            n_pcs = np.argmax(np.nanmean(inner_accs,0))+1
+            n_pcs_sel.append(n_pcs)
+            
+            X_train = pca_sol.transform(X[train_inds])[:,:n_pcs]
+            X_test = pca_sol.transform(X[test_inds])[:,:n_pcs]
+            model = RidgeClassifierCV(alphas=np.logspace(-4,4,num=9)).fit(X_train, y[train_inds])
+            preds = model.predict(X_test)
+            true = y[test_inds]
+            accs.append(sklearn.metrics.balanced_accuracy_score(true, preds, adjusted=False))
+        print(f'Classifying {y_name} based on PCs of {x_name}')
+        print(f'mean of {np.mean(n_pcs_sel)} pcs selected \n accuracy: {np.mean(accs)}')
+        
+        return np.mean(accs), np.mean(n_pcs_sel)
+
     
 def cohens_d(x,y):
     nx = len(x)
