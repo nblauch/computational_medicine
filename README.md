@@ -10,7 +10,7 @@ To run the code, first configure directories and acquire the data
 
 Next, run the following scripts
 1) `python get_connectomes.py`
-2) `python submit_jobs.py` ; if no HPC is available, run with `--no-slurm`. note this may take a very long time to run, depending on how many CPUs are available per job.
+2) `python submit_ce_jobs.py` ; if no HPC is available, run with `--no-slurm`. note this may take a very long time to run, depending on how many CPUs are available per job.
 
 Finally, perform classification analyses using the `project.ipynb` notebook
 
