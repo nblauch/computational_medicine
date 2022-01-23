@@ -3,13 +3,16 @@ import os
 import pandas as pd
 from nilearn.connectome import ConnectivityMeasure
 import nibabel as nib
+import glob
 import nilearn
 
 # configure as needed
-if os.env('SERVERNAME') == 'xps':
+if os.getenv('SERVERNAME') == 'xps':
     BIDS_DIR = '/mnt/d/bids/ds000030'
-elif os.env('SERVERNAME') == 'mind':
+elif os.getenv('SERVERNAME') == 'mind':
     BIDS_DIR = '/user_data/nblauch/bids/ds000030'
+
+SUBJECTS=[os.path.basename(folder) for folder in glob.glob('/mnt/d/bids/ds000030/derivatives/fmriprep/*')]
 
 GLASSER_ROIS_LONG = {'V1':1, 'medial superior temporal area':2, 'V6':3, 'V2':4, 'V3':5, 'V4':6, 'V8':7, 'primary motor cortex':8,
                     'primary sensory cortex':9, 'FEF':10, 'premotor eye field':11, 'area 55b':12, 'area V3A':13,
