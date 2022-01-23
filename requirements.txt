@@ -1,0 +1,11 @@
+tqdm==4.42.1
+scipy==1.5.3
+pandas==1.0.5
+matplotlib==3.1.3
+cepy==0.1.2
+nibabel==3.1.0
+numpy==1.18.1
+nilearn.egg==info
+ipython==7.30.1
+nilearn==0.8.1
+scikit_learn==1.0.1
